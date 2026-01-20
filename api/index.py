@@ -1,0 +1,251 @@
+from flask import Flask, jsonify, request
+from discord_interactions import verify_key_decorator, InteractionType, InteractionResponseType
+from supabase import create_client
+import os
+import requests
+import json
+
+app = Flask(__name__)
+
+# --- CONFIGURATION ---
+# Load environment variables
+supabase = create_client(os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_KEY"))
+public_key = os.environ.get("DISCORD_PUBLIC_KEY")
+track17_key = os.environ.get("TRACK17_KEY")
+
+@app.route('/api/interactions', methods=['POST'])
+@verify_key_decorator(public_key)
+def interactions():
+    data = request.json
+
+    # 1. Handle Ping (Discord checks if bot is alive)
+    if data["type"] == InteractionType.PING:
+        return jsonify({"type": InteractionResponseType.PONG})
+
+    # 2. Handle Commands
+    if data["type"] == InteractionType.APPLICATION_COMMAND:
+        command_name = data["data"]["name"]
+        
+        # We get the user ID to know who is asking
+        user_id = data["member"]["user"]["id"] if "member" in data else data["user"]["id"]
+
+        # ==============================
+        #     STOCK TRACKER LOGIC
+        # ==============================
+        
+        # Command: /add_stock
+        if command_name == "add_stock":
+            options = {opt["name"]: opt["value"] for opt in data["data"].get("options", [])}
+            symbol = options.get("symbol").strip().upper() # Added .strip() to remove accidental spaces
+            target = options.get("target")
+            bucket = options.get("bucket").upper()
+
+            if bucket not in ['A', 'B']:
+                return jsonify({
+                    "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    "data": {"content": "❌ Error: Bucket must be 'A' or 'B'"}
+                })
+
+            try:
+                # 1. CHECK FOR DUPLICATES
+                existing = supabase.table("stocks").select("symbol").eq("symbol", symbol).execute()
+                
+                # If existing.data is not empty, it means the stock is already there
+                if existing.data:
+                    return jsonify({
+                        "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                        "data": {"content": f"⚠️ **{symbol}** is already in your watchlist!\nUse `/edit_stock` to change the target price."}
+                    })
+
+                # 2. INSERT IF NEW
+                data_payload = {"symbol": symbol, "target_price": target, "bucket": bucket}
+                supabase.table("stocks").insert(data_payload).execute()
+                
+                return jsonify({
+                    "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    "data": {"content": f"✅ Added **{symbol}** (Target: {target}) to Bucket **{bucket}**!"}
+                })
+
+            except Exception as e:
+                return jsonify({
+                    "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    "data": {"content": f"❌ Database error: {str(e)}"}
+                })
+
+        # Command: /list_stock
+        elif command_name == "list_stock":
+            try:
+                response = supabase.table('stocks').select("*").order('bucket').execute()
+                stocks = response.data
+                
+                if not stocks:
+                    return jsonify({
+                        "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                        "data": {"content": "📭 Your watchlist is empty."}
+                    })
+
+                msg = "**📜 Current Watchlist Settings**\n*(Report sent daily at around 14:00)*\n\n"
+                
+                # Bucket A
+                msg += "**Bucket A (Proven):**\n"
+                bucket_a = [s for s in stocks if s['bucket'] == 'A']
+                if bucket_a:
+                    for s in bucket_a:
+                        msg += f"• **{s['symbol']}** (Target: {s['target_price']})\n"
+                else:
+                    msg += "_(Empty)_\n"
+
+                # Bucket B
+                msg += "\n**Bucket B (High Risk):**\n"
+                bucket_b = [s for s in stocks if s['bucket'] == 'B']
+                if bucket_b:
+                    for s in bucket_b:
+                        msg += f"• **{s['symbol']}** (Target: {s['target_price']})\n"
+                else:
+                    msg += "_(Empty)_\n"
+
+                return jsonify({
+                    "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    "data": {"content": msg}
+                })
+
+            except Exception as e:
+                return jsonify({
+                    "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    "data": {"content": f"❌ Error: {str(e)}"}
+                })
+
+        # ==============================
+        #     PARCEL TRACKER LOGIC
+        # ==============================
+
+        # Command: /track [number]
+        elif command_name == "track":
+            tracking_number = data["data"]["options"][0]["value"]
+            
+            # Step 1: Register with 17Track API
+            headers = {"RF-TOKEN": track17_key, "Content-Type": "application/json"}
+            url = "https://api.17track.net/track/v2.2/register"
+            payload = [{"number": tracking_number}] 
+            
+            try:
+                resp = requests.post(url, json=payload, headers=headers)
+                result = resp.json()
+            except Exception as e:
+                 return jsonify({
+                    "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    "data": {"content": f"❌ API Error: Could not connect to 17Track."}
+                })
+            
+            # Step 2: Check if 17Track accepted it
+            if result.get("code") == 0:
+                # Success! Now save to Supabase
+                db_data = {
+                    "tracking_number": tracking_number,
+                    "discord_user_id": user_id,
+                    "last_status": "Registered"
+                }
+                try:
+                    supabase.table("parcels").insert(db_data).execute()
+                    return jsonify({
+                        "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                        "data": {"content": f"📦 **Tracking Started!**\nNumber: `{tracking_number}`\nI will notify you when it moves."}
+                    })
+                except Exception as e:
+                    return jsonify({
+                        "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                        "data": {"content": f"❌ Database Error: {str(e)}"}
+                    })
+            else:
+                # Error from 17Track (Limit reached, or invalid number)
+                error_msg = result.get('message', 'Unknown error')
+                return jsonify({
+                    "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    "data": {"content": f"❌ **Error:** 17Track rejected this number.\nReason: {error_msg}"}
+                })
+
+        # Command: /parcels
+        elif command_name == "parcels":
+            try:
+                # Fetch only parcels for this specific user
+                response = supabase.table('parcels').select("*").eq("discord_user_id", user_id).execute()
+                parcels = response.data
+                
+                if not parcels:
+                    return jsonify({
+                        "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                        "data": {"content": "📭 You are not tracking any parcels."}
+                    })
+                
+                msg = "**📦 Your Active Parcels**\n"
+                for p in parcels:
+                    msg += f"• `{p['tracking_number']}` - {p['last_status']}\n"
+                    
+                return jsonify({
+                    "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    "data": {"content": msg}
+                })
+            except Exception as e:
+                return jsonify({
+                        "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                        "data": {"content": f"❌ Database Error: {str(e)}"}
+                    })
+    
+        # === Command: /delete_stock [symbol] ===
+        elif command_name == "delete_stock":
+            symbol = data["data"]["options"][0]["value"].upper()
+
+            try:
+                # 1. Check if it exists first
+                check = supabase.table("stocks").select("*").eq("symbol", symbol).execute()
+                if not check.data:
+                    return jsonify({
+                        "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                        "data": {"content": f"❌ Error: Stock **{symbol}** not found in your list."}
+                    })
+
+                # 2. Delete it
+                supabase.table("stocks").delete().eq("symbol", symbol).execute()
+                
+                return jsonify({
+                    "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    "data": {"content": f"🗑️ **{symbol}** has been removed from your watchlist."}
+                })
+
+            except Exception as e:
+                return jsonify({
+                    "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    "data": {"content": f"❌ Database Error: {str(e)}"}
+                })
+            
+        # === Command: /edit_stock [symbol] [new_target] ===
+        elif command_name == "edit_stock":
+            options = {opt["name"]: opt["value"] for opt in data["data"].get("options", [])}
+            symbol = options.get("symbol").upper()
+            new_target = options.get("new_target")
+
+            try:
+                # 1. Check if it exists
+                check = supabase.table("stocks").select("*").eq("symbol", symbol).execute()
+                if not check.data:
+                    return jsonify({
+                        "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                        "data": {"content": f"❌ Error: Stock **{symbol}** not found. Use `/add_stock` first."}
+                    })
+
+                # 2. Update the target price
+                supabase.table("stocks").update({"target_price": new_target}).eq("symbol", symbol).execute()
+                
+                return jsonify({
+                    "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    "data": {"content": f"✅ Updated **{symbol}** target price to **{new_target}**."}
+                })
+
+            except Exception as e:
+                return jsonify({
+                    "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    "data": {"content": f"❌ Database Error: {str(e)}"}
+                })
+
+    # Default response for unknown commands
+    return jsonify({"type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE, "data": {"content": "Command not recognized"}})

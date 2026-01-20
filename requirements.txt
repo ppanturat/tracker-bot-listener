@@ -1,0 +1,5 @@
+flask
+discord-interactions
+supabase
+requests
+python-dotenv
