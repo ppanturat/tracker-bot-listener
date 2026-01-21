@@ -5,7 +5,7 @@
 
 > **Note:** This repository is **Part 2** of the Universal Discord Tracker system.
 > * **Part 1 (The Watcher):** [Link to Part 1](https://github.com/ppanturat/tracker-bot)
-> * **Part 2 (The Listener):** You are here
+> * **Part 2 (The Listener):** You are here.
 
 ---
 
