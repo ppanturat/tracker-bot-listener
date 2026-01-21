@@ -123,8 +123,8 @@ def interactions():
         elif command_name == "track":
             tracking_number = data["data"]["options"][0]["value"]
             
-            # Step 1: Register with 17Track API
-            headers = {"RF-TOKEN": track17_key, "Content-Type": "application/json"}
+            # Register with 17Track
+            headers = {"17token": track17_key, "Content-Type": "application/json"}
             url = "https://api.17track.net/track/v2.2/register"
             payload = [{"number": tracking_number}] 
             
@@ -134,19 +134,35 @@ def interactions():
             except Exception as e:
                  return jsonify({
                     "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-                    "data": {"content": f"❌ API Error: Could not connect to 17Track."}
+                    "data": {"content": f"❌ API Error: Could not connect to 17Track.\n{str(e)}"}
                 })
+      
+            # Code 0 = Success. 
+            # Code -18019901 = Duplicate (Already registered). We treat this as SUCCESS.
+            code = result.get("code")
             
-            # Step 2: Check if 17Track accepted it
-            if result.get("code") == 0:
-                # Success! Now save to Supabase
+            if code == 0 or code == -18019901:
+                
+                # Double Check: Did they reject it 
+                if result.get("data", {}).get("rejected"):
+                    rej_msg = result["data"]["rejected"][0].get("error", {}).get("message", "Invalid Number")
+                    return jsonify({
+                        "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                        "data": {"content": f"❌ **17Track Rejected:** {rej_msg}"}
+                    })
+
+                # Success --> Save to Supabase
                 db_data = {
                     "tracking_number": tracking_number,
                     "discord_user_id": user_id,
                     "last_status": "Registered"
                 }
                 try:
-                    supabase.table("parcels").insert(db_data).execute()
+                    # Check if WE already have it to avoid DB crash
+                    existing = supabase.table("parcels").select("*").eq("tracking_number", tracking_number).execute()
+                    if not existing.data:
+                        supabase.table("parcels").insert(db_data).execute()
+                    
                     return jsonify({
                         "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
                         "data": {"content": f"📦 **Tracking Started!**\nNumber: `{tracking_number}`\nI will notify you when it moves."}
@@ -157,11 +173,11 @@ def interactions():
                         "data": {"content": f"❌ Database Error: {str(e)}"}
                     })
             else:
-                # Error from 17Track (Limit reached, or invalid number)
+                # Actual Error (Limit reached, key invalid, etc.)
                 error_msg = result.get('message', 'Unknown error')
                 return jsonify({
                     "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-                    "data": {"content": f"❌ **Error:** 17Track rejected this number.\nReason: {error_msg}"}
+                    "data": {"content": f"❌ **API Error:** {error_msg} (Code: {code})"}
                 })
 
         # Command: /parcels
