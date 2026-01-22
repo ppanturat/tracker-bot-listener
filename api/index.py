@@ -222,7 +222,7 @@ def interactions():
                     "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
                     "data": {"content": f"❌ **API Error:** {error_msg} (Code: {code})"}
                 })
-
+                
         # Command: /parcels
         elif command_name == "parcels":
             try:
@@ -231,3 +231,21 @@ def interactions():
                 parcels = response.data
                 
                 if not parcels:
+                    return jsonify({
+                        "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                        "data": {"content": "📭 You are not tracking any parcels."}
+                    })
+                
+                msg = "**📦 Your Active Parcels**\n"
+                for p in parcels:
+                    msg += f"• `{p['tracking_number']}` - {p['last_status']}\n"
+                    
+                return jsonify({
+                    "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    "data": {"content": msg}
+                })
+            except Exception as e:
+                return jsonify({
+                    "type": InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+                    "data": {"content": f"❌ Database Error: {str(e)}"}
+                })
