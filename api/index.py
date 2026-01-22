@@ -17,11 +17,11 @@ track17_key = os.environ.get("TRACK17_KEY")
 def interactions():
     data = request.json
 
-    # 1. Handle Ping (Discord checks if bot is alive)
+    # Handle Ping (Discord checks if bot is alive)
     if data["type"] == InteractionType.PING:
         return jsonify({"type": InteractionResponseType.PONG})
 
-    # 2. Handle Commands
+    # Handle Commands
     if data["type"] == InteractionType.APPLICATION_COMMAND:
         command_name = data["data"]["name"]
         
@@ -29,7 +29,7 @@ def interactions():
         user_id = data["member"]["user"]["id"] if "member" in data else data["user"]["id"]
 
         # ==============================
-        #      STOCK TRACKER LOGIC
+        #         STOCK TRACKER
         # ==============================
         
         # Command: /add_stock
@@ -46,7 +46,7 @@ def interactions():
                 })
 
             try:
-                # 1. Check for duplicates
+                # Check for duplicates
                 existing = supabase.table("stocks").select("symbol").eq("symbol", symbol).execute()
                 if existing.data:
                     return jsonify({
@@ -54,7 +54,7 @@ def interactions():
                         "data": {"content": f"⚠️ **{symbol}** is already in your watchlist!\nUse `/edit_stock` to change the target price."}
                     })
 
-                # 2. Insert if new
+                # Insert if new
                 data_payload = {"symbol": symbol, "target_price": target, "bucket": bucket}
                 supabase.table("stocks").insert(data_payload).execute()
                 
@@ -158,14 +158,14 @@ def interactions():
                 })
 
         # ==============================
-        #      PARCEL TRACKER LOGIC
+        #         PARCEL TRACKER
         # ==============================
 
         # Command: /track [number]
         elif command_name == "track":
             tracking_number = data["data"]["options"][0]["value"]
             
-            # 1. Register with 17Track
+            # Register with 17Track
             headers = {"17token": track17_key, "Content-Type": "application/json"}
             url = "https://api.17track.net/track/v2.2/register"
             payload = [{"number": tracking_number}] 
@@ -179,14 +179,13 @@ def interactions():
                     "data": {"content": f"❌ API Error: Could not connect to 17Track.\n{str(e)}"}
                 })
             
-            # 2. Logic Check
+            # Logic Check
             # Code 0 = Success. 
-            # Code -18019901 = Duplicate (Already registered). We treat this as SUCCESS.
+            # Code -18019901 = Duplicate (Already registered) --> SUCCESS.
             code = result.get("code")
             
             if code == 0 or code == -18019901:
                 
-                # Double Check: Did they reject it inside the data packet?
                 if result.get("data", {}).get("rejected"):
                     rej_msg = result["data"]["rejected"][0].get("error", {}).get("message", "Invalid Number")
                     return jsonify({
@@ -194,14 +193,14 @@ def interactions():
                         "data": {"content": f"❌ **17Track Rejected:** {rej_msg}"}
                     })
 
-                # Success! Save to Supabase
+                # Success -> Save to Supabase
                 db_data = {
                     "tracking_number": tracking_number,
                     "discord_user_id": user_id,
                     "last_status": "Registered"
                 }
                 try:
-                    # Check for duplicates in OUR database
+                    # Check for duplicates in database
                     existing = supabase.table("parcels").select("*").eq("tracking_number", tracking_number).execute()
                     if not existing.data:
                         supabase.table("parcels").insert(db_data).execute()
