@@ -116,4 +116,4 @@ You must explicitly tell Discord that this new command exists.
 * You likely forgot to install the new dependency. Run `pip install python-dotenv`.
 
 ---
-*Created for the Universal Discord Tracker project.*
+*Created for Personal Use.*
