@@ -1,5 +1,5 @@
-flask
-discord-interactions
-supabase
-requests
-python-dotenv
+Flask==3.0.0
+discord-interactions==0.3.0
+supabase==2.3.0
+requests==2.31.0
+gunicorn==21.2.0
