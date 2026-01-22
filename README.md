@@ -1,4 +1,4 @@
-# 🎧 Tracker Bot Listener (The "Brain")
+# 🎧 Tracker Bot Listener 
 
 **Host:** Vercel (Serverless Function)
 **Role:** Handles incoming Discord Slash Commands via Webhooks.
